@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>k-NN Classification Visualizer</title>
+<style>
+    body {
+        font-family: 'Verdana', sans-serif;
+        background-color: #111;
+        color: #eee;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 0;
+    }
+    h1 {
+        margin-top: 20px;
+        color: #fff;
+        text-shadow: 1px 1px 4px #00f;
+    }
+    #canvas-wrapper {
+        background-color: #000;
+        padding: 15px;
+        margin-top: 20px;
+        border-radius: 12px;
+        border: 1.5px solid #444;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.8);
+        position: relative;
+    }
+    canvas {
+        display: block;
+        border-radius: 10px;
+    }
+    .controls {
+        margin-top: 15px;
+    }
+    label {
+        margin-right: 8px;
+    }
+    select, button {
+        margin-right: 10px;
+        background-color: #222;
+        color: #fff;
+        border: 1px solid #555;
+        padding: 4px 6px;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+    #legend {
+        display: flex;
+        margin-top: 15px;
+        gap: 15px;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .color-box {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+    }
+    #hoverLabel {
+        position: absolute;
+        background: #222;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        color: #fff;
+        display: none;
+    }
+</style>
+</head>
+<body>
+
+<h1>k-NN Classification Visualizer</h1>
+
+<div class="controls">
+    <label for="pointsCount">Points:</label>
+    <select id="pointsCount"></select>
+
+    <label for="kSelect">k-value:</label>
+    <select id="kSelect"></select>
+
+    <button id="classifyBtn">Classify Point</button>
+</div>
+
+<div id="canvas-wrapper">
+    <canvas id="knnCanvas" width="500" height="350"></canvas>
+    <div id="hoverLabel"></div>
+</div>
+
+<div id="legend"></div>
+
+<script>
+    const categories = [
+        { name: 'X', color: '#ff4c4c' },
+        { name: 'Y', color: '#4cb7ff' },
+        { name: 'Z', color: '#4cff7f' }
+    ];
+
+    const pointsDropdown = document.getElementById('pointsCount');
+    for (let i = 10; i <= 100; i += 10) {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = i;
+        pointsDropdown.appendChild(opt);
+    }
+
+    const kDropdown = document.getElementById('kSelect');
+    for (let i = 1; i <= 9; i += 2) {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = i;
+        kDropdown.appendChild(opt);
+    }
+
+    const legendDiv = document.getElementById('legend');
+    categories.forEach(cat => {
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        item.innerHTML = `<div class="color-box" style="background:${cat.color}"></div>${cat.name}`;
+        legendDiv.appendChild(item);
+    });
+
+    let dataPoints = [];
+    let kValue = 3;
+    let selectedPoint = null;
+    let pendingPoint = null;
+
+    const canvas = document.getElementById('knnCanvas');
+    const ctx = canvas.getContext('2d');
+    const hoverLabel = document.getElementById('hoverLabel');
+
+    function createRandomPoints(count) {
+        const arr = [];
+        const centerX = 250, centerY = 175;
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * 2 * Math.PI;
+            const radius = 90 + Math.random() * 70;
+            const x = centerX + Math.cos(angle) * radius + (Math.random() * 20 - 10);
+            const y = centerY + Math.sin(angle) * radius + (Math.random() * 20 - 10);
+            const cls = Math.floor(Math.random() * categories.length);
+            arr.push({ x, y, cls, isPredicted: false });
+        }
+        return arr;
+    }
+
+    function renderPoints() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        dataPoints.forEach(pt => {
+            // Draw glowing circle for predicted points
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, pt.isPredicted ? 14 : 10, 0, 2 * Math.PI);
+            ctx.fillStyle = pt.isPredicted ? categories[pt.cls].color + '80' : categories[pt.cls].color;
+            ctx.shadowColor = pt.isPredicted ? categories[pt.cls].color : 'transparent';
+            ctx.shadowBlur = pt.isPredicted ? 15 : 0;
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+            ctx.closePath();
+
+            // Draw label
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#fff';
+            ctx.font = pt.isPredicted ? 'bold 14px Verdana' : 'bold 12px Verdana';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(categories[pt.cls].name, pt.x, pt.y);
+        });
+    }
+
+    function classifyPoint(x, y, k) {
+        const distances = dataPoints
+            .filter(pt => !pt.isPredicted)
+            .map(pt => ({ cls: pt.cls, dist: Math.hypot(pt.x - x, pt.y - y), x: pt.x, y: pt.y }))
+            .sort((a, b) => a.dist - b.dist);
+
+        const nearest = distances.slice(0, k);
+        const counts = {};
+        nearest.forEach(n => counts[n.cls] = (counts[n.cls] || 0) + 1);
+
+        let maxCount = -1, chosenCls = 0;
+        for (let cls in counts) {
+            if (counts[cls] > maxCount) {
+                maxCount = counts[cls];
+                chosenCls = parseInt(cls);
+            }
+        }
+
+        // Draw lines to 5 nearest neighbors
+        ctx.save();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        nearest.slice(0, 5).forEach(n => {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(n.x, n.y);
+            ctx.stroke();
+            ctx.closePath();
+        });
+        ctx.restore();
+
+        return chosenCls;
+    }
+
+    function getPointAt(x, y) {
+        return dataPoints.find(pt => Math.hypot(pt.x - x, pt.y - y) < 14);
+    }
+
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const pt = getPointAt(x, y);
+        if (pt) {
+            hoverLabel.style.display = 'block';
+            hoverLabel.style.left = e.clientX + 10 + 'px';
+            hoverLabel.style.top = e.clientY + 10 + 'px';
+            hoverLabel.textContent = categories[pt.cls].name + (pt.isPredicted ? ' (predicted)' : '');
+        } else {
+            hoverLabel.style.display = 'none';
+        }
+    });
+
+    canvas.addEventListener('click', e => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const pt = getPointAt(x, y);
+        if (pt) {
+            selectedPoint = pt;
+            renderPoints();
+            classifyPoint(pt.x, pt.y, 5); // show neighbors on click
+        } else {
+            pendingPoint = { x, y };
+        }
+    });
+
+    document.getElementById('classifyBtn').addEventListener('click', () => {
+        if (pendingPoint) {
+            const cls = classifyPoint(pendingPoint.x, pendingPoint.y, kValue);
+            dataPoints.push({ ...pendingPoint, cls, isPredicted: true });
+            pendingPoint = null;
+            renderPoints();
+        }
+    });
+
+    pointsDropdown.addEventListener('change', function() {
+        dataPoints = createRandomPoints(Number(this.value));
+        renderPoints();
+    });
+
+    kDropdown.addEventListener('change', function() {
+        kValue = Number(this.value);
+    });
+
+    // Initialize
+    pointsDropdown.value = 50;
+    kDropdown.value = 3;
+    dataPoints = createRandomPoints(50);
+    renderPoints();
+</script>
+
+</body>
+</html>
